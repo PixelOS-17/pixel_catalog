@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Refresh catalog.json from Google's public Pixel build pages.
 
-The profiles match PixelDeviceRepository: canary builds from the Flash
-Station API, and the newest stable build for each codename from the same
-API. The public factory-images page no longer includes those tables.
-A run that learns nothing leaves the existing catalog alone.
+Canary builds come from the Flash Station API, and the newest stable
+build for each codename comes from the same API. Device order, marketing
+names, and launch SDK levels are read from catalog.json and written back
+unchanged. A run that learns nothing leaves the existing catalog alone.
 """
 
 import email.utils
@@ -33,67 +33,23 @@ UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-DEVICE_MODEL_MAP = {
-    "oriole": "Pixel 6",
-    "raven": "Pixel 6 Pro",
-    "bluejay": "Pixel 6a",
-    "panther": "Pixel 7",
-    "cheetah": "Pixel 7 Pro",
-    "lynx": "Pixel 7a",
-    "felix": "Pixel Fold",
-    "shiba": "Pixel 8",
-    "husky": "Pixel 8 Pro",
-    "akita": "Pixel 8a",
-    "tangorpro": "Pixel Tablet",
-    "tokay": "Pixel 9",
-    "caiman": "Pixel 9 Pro",
-    "komodo": "Pixel 9 Pro XL",
-    "comet": "Pixel 9 Pro Fold",
-    "tegu": "Pixel 9a",
-    "frankel": "Pixel 10",
-    "blazer": "Pixel 10 Pro",
-    "mustang": "Pixel 10 Pro XL",
-    "rango": "Pixel 10 Pro Fold",
-    "stallion": "Pixel 10a",
-    "cubs": "Pixel 11",
-    "grizzly": "Pixel 11 Pro",
-    "kodiak": "Pixel 11 Pro XL",
-    "yogi": "Pixel 11 Pro Fold",
-    "formosan": "Pixel 11a",
-    "galago": "Pixel 12",
-    "sasquatch": "Pixel 12 Pro",
-    "silverback": "Pixel 12 Pro XL",
-    "capuchin": "Pixel 12 Pro Fold",
-}
-
-PICKER_ORDER = [
-    "silverback", "sasquatch", "capuchin", "galago",
-    "kodiak", "grizzly", "yogi", "cubs", "formosan",
-    "mustang", "rango", "blazer", "frankel", "stallion",
-    "komodo", "caiman", "comet", "tokay", "tegu",
-    "tangorpro",
-    "husky", "felix", "shiba", "akita",
-    "cheetah", "panther", "lynx",
-    "raven", "oriole", "bluejay",
-]
-GENERATION_ORDER = [
-    "kodiak", "grizzly", "yogi", "cubs",
-    "mustang", "rango", "blazer", "frankel", "stallion",
-    "komodo", "caiman", "comet", "tokay", "tegu",
-    "tangorpro",
-]
-INITIAL_SDK = {
-    "oriole": "31", "raven": "31",
-    "bluejay": "32",
-    "panther": "33", "cheetah": "33", "lynx": "33", "felix": "33", "tangorpro": "33",
-    "shiba": "34", "husky": "34", "akita": "34",
-    "tokay": "34", "caiman": "34", "komodo": "34", "comet": "34",
-    "tegu": "35",
-    "frankel": "36", "blazer": "36", "mustang": "36", "rango": "36", "stallion": "36",
-    "cubs": "37", "grizzly": "37", "kodiak": "37", "yogi": "37",
-}
-DEFAULT_CODENAME = "bluejay"
+# Filled from catalog.json by load_table(). The file is the source of these lists.
+DEVICE_MODEL_MAP = {}
+PICKER_ORDER = []
+GENERATION_ORDER = []
+INITIAL_SDK = {}
+DEFAULT_CODENAME = ""
 DEFAULT_INITIAL_SDK = "32"
+TABLET_CODENAME = ""
+TABLE_KEYS = (
+    "models",
+    "picker_order",
+    "generation_order",
+    "initial_sdk",
+    "default_codename",
+    "default_initial_sdk",
+    "tablet_codename",
+)
 
 class RateLimited(Exception):
     pass
@@ -512,7 +468,9 @@ def default_codename(profiles):
     for codename in GENERATION_ORDER:
         if codename in present:
             return codename
-    return "kodiak"
+    if profiles:
+        return profiles[0]["codename"]
+    return DEFAULT_CODENAME
 
 
 def load_existing():
@@ -523,6 +481,23 @@ def load_existing():
     except json.JSONDecodeError as error:
         print(f"existing catalog is unreadable: {error}", file=sys.stderr)
         return None
+
+
+def load_table(existing):
+    global DEVICE_MODEL_MAP, PICKER_ORDER, GENERATION_ORDER, INITIAL_SDK
+    global DEFAULT_CODENAME, DEFAULT_INITIAL_SDK, TABLET_CODENAME
+    if not isinstance(existing, dict):
+        raise SystemExit("catalog.json is missing")
+    missing = [key for key in TABLE_KEYS if key not in existing]
+    if missing:
+        raise SystemExit("catalog.json is missing " + ", ".join(missing))
+    DEVICE_MODEL_MAP = existing["models"]
+    PICKER_ORDER = list(existing["picker_order"])
+    GENERATION_ORDER = list(existing["generation_order"])
+    INITIAL_SDK = existing["initial_sdk"]
+    DEFAULT_CODENAME = existing["default_codename"]
+    DEFAULT_INITIAL_SDK = str(existing["default_initial_sdk"])
+    TABLET_CODENAME = existing["tablet_codename"]
 
 
 def merge_profiles(fresh, previous, stopped_early):
@@ -549,6 +524,7 @@ def comparable(document):
 
 def main():
     existing = load_existing()
+    load_table(existing)
     previous_profiles = (existing or {}).get("profiles") or []
     previous_stable = (existing or {}).get("stable") or []
 
@@ -578,6 +554,12 @@ def main():
     document = {
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "default_codename": default_codename(profiles or stable),
+        "default_initial_sdk": DEFAULT_INITIAL_SDK,
+        "tablet_codename": TABLET_CODENAME,
+        "generation_order": GENERATION_ORDER,
+        "picker_order": PICKER_ORDER,
+        "models": DEVICE_MODEL_MAP,
+        "initial_sdk": INITIAL_SDK,
         "profiles": sort_profiles(profiles),
         "stable": sort_profiles(stable),
     }
